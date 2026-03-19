@@ -1,0 +1,101 @@
+name: Sync Health Data
+
+on:
+  schedule:
+    # 每天 UTC 18:00 执行（北京时间凌晨2点）
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install pnpm
+        run: |
+          npm install -g corepack
+          corepack enable
+          pnpm install
+
+      - name: Sync Huawei Health Data
+        env:
+          HUAWEI_ACCESS_TOKEN: ${{ secrets.HUAWEI_ACCESS_TOKEN }}
+          HUAWEI_REFRESH_TOKEN: ${{ secrets.HUAWEI_REFRESH_TOKEN }}
+          HUAWEI_IS_CN: ${{ vars.HUAWEI_IS_CN || 'true' }}
+        run: |
+          if [ -n "$HUAWEI_ACCESS_TOKEN" ]; then
+            python run_page/huawei_sync.py --days 30
+          else
+            echo "华为健康Token未配置，跳过同步"
+          fi
+
+      - name: Sync Apple Health Data
+        if: env.APPLE_HEALTH_EXPORT != ''
+        env:
+          APPLE_HEALTH_EXPORT: ${{ secrets.APPLE_HEALTH_EXPORT }}
+        run: |
+          if [ -n "$APPLE_HEALTH_EXPORT" ]; then
+            python run_page/apple_sync.py
+          fi
+
+      - name: Generate AI Suggestions
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'gpt-4o-mini' }}
+        run: |
+          if [ -n "$AI_API_KEY" ]; then
+            python run_page/suggestion_gen.py
+          else
+            echo "AI API未配置，跳过建议生成"
+          fi
+
+      - name: Generate visualization
+        run: python run_page/gen_svg.py --from-db
+
+      - name: Build
+        run: pnpm build
+
+      - name: Commit and Push
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add -A
+          git diff --quiet && git diff --staged --quiet || git commit -m "chore: sync health data [skip ci]"
+          git push
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: sync
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
