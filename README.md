@@ -28,34 +28,27 @@
 
 详细教程请参考 [华为Token获取指南](docs/huawei-token.md)
 
-#### 方式一：华为开发者平台（推荐）
+通过抓包获取 Token：
 
-1. 注册 [华为开发者账号](https://developer.huawei.com/consumer/cn/)
-2. 创建项目和应用
-3. 开通 Health Kit 服务
-4. 获取 Client ID 和 Client Secret
-5. 使用 OAuth2 授权获取 Token
-
-#### 方式二：抓包获取
-
-1. 安装抓包工具（Charles / mitmproxy）
-2. 手机配置代理
-3. 打开华为运动健康 App
+1. 安装抓包工具（推荐 macOS 用 [Proxyman](https://proxyman.io/)）
+2. 手机配置代理，安装 HTTPS 证书
+3. 打开华为运动健康 App，刷新数据
 4. 找到 `health-api.hicloud.com` 请求
-5. 复制 `Authorization: Bearer xxx` 中的 Token
+5. 复制请求头中 `Authorization: Bearer xxx` 的 Token 部分
 
 ### 3. 配置 Secrets
 
-在 Fork 的仓库中设置 Secrets：
+在 Fork 的仓库中设置 Secret：
 
 `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|------|
-| `HUAWEI_ACCESS_TOKEN` | 华为健康访问令牌 | ✅ |
-| `HUAWEI_REFRESH_TOKEN` | 华为健康刷新令牌 | 推荐 |
+| `HUAWEI_ACCESS_TOKEN` | 华为健康访问令牌（抓包获取） | ✅ |
 | `AI_API_KEY` | AI API 密钥（用于健康建议） | 可选 |
 | `AI_BASE_URL` | AI API 地址 | 可选 |
+
+> ⚠️ Token 有效期约 24 小时，需要定期更新。
 
 ### 4. 启用 GitHub Pages
 
