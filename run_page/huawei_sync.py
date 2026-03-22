@@ -8,6 +8,8 @@
 环境变量:
     HUAWEI_ACCESS_TOKEN: 访问令牌
     HUAWEI_REFRESH_TOKEN: 刷新令牌
+    HUAWEI_CLIENT_ID: 客户端ID
+    HUAWEI_CLIENT_SECRET: 客户端密钥
     HUAWEI_IS_CN: 是否中国区 (true/false)
 """
 
@@ -36,6 +38,7 @@ TIMEOUT = httpx.Timeout(240.0, connect=360.0)
 # 华为API端点
 HUAWEI_API_CN = "https://health-api.hicloud.com"
 HUAWEI_API_GLOBAL = "https://health-api.huawei.com"
+HUAWEI_OAUTH_URL = "https://oauth-login.cloud.huawei.com/oauth2/v3/token"
 
 
 class HuaweiHealthClient:
@@ -45,13 +48,18 @@ class HuaweiHealthClient:
         self,
         access_token: str,
         refresh_token: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
         is_cn: bool = True,
     ):
         self.client = httpx.AsyncClient(timeout=TIMEOUT)
         self.access_token = access_token
         self.refresh_token = refresh_token
+        self.client_id = client_id
+        self.client_secret = client_secret
         self.base_url = HUAWEI_API_CN if is_cn else HUAWEI_API_GLOBAL
         self.is_cn = is_cn
+        self._new_tokens: dict | None = None
 
     def _get_headers(self) -> dict:
         """获取请求头"""
@@ -61,6 +69,50 @@ class HuaweiHealthClient:
             "User-Agent": "HuaweiHealth/12.0.0",
             "Accept-Language": "zh-CN" if self.is_cn else "en-US",
         }
+
+    async def refresh_access_token(self) -> bool:
+        """使用 refresh_token 刷新 access_token"""
+        if not self.refresh_token or not self.client_id or not self.client_secret:
+            logger.warning("缺少 refresh_token 或 client 凭证，无法自动刷新")
+            return False
+
+        logger.info("正在刷新 access_token...")
+
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": self.refresh_token,
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
+
+        try:
+            response = await self.client.post(
+                HUAWEI_OAUTH_URL,
+                data=data,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            self.access_token = result.get("access_token")
+            if result.get("refresh_token"):
+                self.refresh_token = result.get("refresh_token")
+
+            # 记录新 token 供外部获取
+            self._new_tokens = {
+                "access_token": self.access_token,
+                "refresh_token": self.refresh_token,
+            }
+
+            logger.info("access_token 刷新成功！")
+            return True
+
+        except Exception as e:
+            logger.error(f"刷新 token 失败: {e}")
+            return False
+
+    def get_new_tokens(self) -> dict | None:
+        """获取刷新后的新 token"""
+        return self._new_tokens
 
     async def get_steps(
         self,
@@ -217,24 +269,34 @@ class HuaweiHealthClient:
 async def sync_huawei_health(
     access_token: str,
     refresh_token: str | None,
+    client_id: str | None,
+    client_secret: str | None,
     is_cn: bool,
     days: int,
     db_path: str,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict | None]:
     """
     同步华为健康数据
 
     Args:
         access_token: 访问令牌
         refresh_token: 刷新令牌
+        client_id: 客户端ID
+        client_secret: 客户端密钥
         is_cn: 是否中国区
         days: 同步天数
         db_path: 数据库路径
 
     Returns:
-        各类数据同步数量统计
+        (各类数据同步数量统计, 新token字典或None)
     """
-    client = HuaweiHealthClient(access_token, refresh_token, is_cn)
+    client = HuaweiHealthClient(
+        access_token,
+        refresh_token,
+        client_id,
+        client_secret,
+        is_cn,
+    )
 
     end_date = dt.date.today()
     start_date = end_date - dt.timedelta(days=days)
@@ -273,6 +335,7 @@ async def sync_huawei_health(
         stress=stress_data,
     )
 
+    new_tokens = client.get_new_tokens()
     await client.close()
 
     logger.info("华为健康数据同步完成！")
@@ -284,7 +347,7 @@ async def sync_huawei_health(
         "activities": len(activities_data),
         "blood_oxygen": len(blood_oxygen_data),
         "stress": len(stress_data),
-    }
+    }, new_tokens
 
 
 def main():
@@ -298,6 +361,16 @@ def main():
         "--refresh-token",
         dest="refresh_token",
         help="华为健康刷新令牌",
+    )
+    parser.add_argument(
+        "--client-id",
+        dest="client_id",
+        help="华为应用 Client ID",
+    )
+    parser.add_argument(
+        "--client-secret",
+        dest="client_secret",
+        help="华为应用 Client Secret",
     )
     parser.add_argument(
         "--is-cn",
@@ -325,6 +398,8 @@ def main():
     # 从环境变量或参数获取token
     access_token = args.access_token or os.environ.get("HUAWEI_ACCESS_TOKEN")
     refresh_token = args.refresh_token or os.environ.get("HUAWEI_REFRESH_TOKEN")
+    client_id = args.client_id or os.environ.get("HUAWEI_CLIENT_ID")
+    client_secret = args.client_secret or os.environ.get("HUAWEI_CLIENT_SECRET")
     is_cn = os.environ.get("HUAWEI_IS_CN", "true").lower() == "true"
 
     if not access_token:
@@ -335,8 +410,7 @@ def main():
         print("  或设置环境变量 HUAWEI_ACCESS_TOKEN")
         print()
         print("获取Token方法:")
-        print("  1. 华为开发者平台: https://developer.huawei.com")
-        print("  2. 抓包获取: 参考 docs/huawei-token.md")
+        print("  参考 docs/huawei-token.md")
         sys.exit(1)
 
     # 确保数据库目录存在
@@ -344,9 +418,11 @@ def main():
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 执行同步
-    result = asyncio.run(sync_huawei_health(
+    result, new_tokens = asyncio.run(sync_huawei_health(
         access_token=access_token,
         refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
         is_cn=is_cn,
         days=args.days,
         db_path=str(db_path),
@@ -356,6 +432,13 @@ def main():
     print("同步结果:")
     for key, value in result.items():
         print(f"  {key}: {value} 条")
+
+    # 如果有新token，保存到文件供 GitHub Actions 使用
+    if new_tokens:
+        tokens_file = Path("run_page/new_tokens.json")
+        with open(tokens_file, "w") as f:
+            json.dump(new_tokens, f)
+        logger.info(f"新 token 已保存到 {tokens_file}")
 
 
 if __name__ == "__main__":

@@ -34,24 +34,39 @@ jobs:
           pnpm install
 
       - name: Sync Huawei Health Data
+        id: sync
         env:
           HUAWEI_ACCESS_TOKEN: ${{ secrets.HUAWEI_ACCESS_TOKEN }}
           HUAWEI_REFRESH_TOKEN: ${{ secrets.HUAWEI_REFRESH_TOKEN }}
+          HUAWEI_CLIENT_ID: ${{ secrets.HUAWEI_CLIENT_ID }}
+          HUAWEI_CLIENT_SECRET: ${{ secrets.HUAWEI_CLIENT_SECRET }}
           HUAWEI_IS_CN: ${{ vars.HUAWEI_IS_CN || 'true' }}
         run: |
           if [ -n "$HUAWEI_ACCESS_TOKEN" ]; then
             python run_page/huawei_sync.py --days 30
           else
             echo "华为健康Token未配置，跳过同步"
+            exit 1
           fi
 
-      - name: Sync Apple Health Data
-        if: env.APPLE_HEALTH_EXPORT != ''
+      - name: Update Token Secrets
+        if: hashFiles('run_page/new_tokens.json') != ''
         env:
-          APPLE_HEALTH_EXPORT: ${{ secrets.APPLE_HEALTH_EXPORT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -n "$APPLE_HEALTH_EXPORT" ]; then
-            python run_page/apple_sync.py
+          if [ -f run_page/new_tokens.json ]; then
+            NEW_ACCESS_TOKEN=$(jq -r '.access_token' run_page/new_tokens.json)
+            NEW_REFRESH_TOKEN=$(jq -r '.refresh_token' run_page/new_tokens.json)
+            
+            echo "更新 access_token..."
+            gh secret set HUAWEI_ACCESS_TOKEN --body "$NEW_ACCESS_TOKEN"
+            
+            if [ "$NEW_REFRESH_TOKEN" != "null" ] && [ -n "$NEW_REFRESH_TOKEN" ]; then
+              echo "更新 refresh_token..."
+              gh secret set HUAWEI_REFRESH_TOKEN --body "$NEW_REFRESH_TOKEN"
+            fi
+            
+            echo "Token 已自动更新！"
           fi
 
       - name: Generate AI Suggestions
